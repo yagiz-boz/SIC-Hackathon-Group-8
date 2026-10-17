@@ -70,4 +70,4 @@ Data lives in the current browser session; there is no database, import or autom
 
 Tests cover validation, defaults, provenance, structured export, Streamlit interactions and the Gemini layer. Gemini tests use a fake client, so they need neither network access nor an API key. Streamlit testing follows its [official AppTest documentation](https://docs.streamlit.io/develop/api-reference/app-testing/st.testing.v1.apptest).
 
-Latest verification (2026-10-17): all 21 tests passed, including the AppTest interaction cases and the out-of-date marker. A live Gemini request still has to be checked with a real key on your machine.
+Latest verification (2026-10-17): all 21 tests passed, including the AppTest interaction cases and the out-of-date marker. A live end-to-end run with gemini-3.8-flash was verified manually: analysis, three validated suggestions with recalculated savings, the out-of-date marker after an input change, and the invalid-key error message.
