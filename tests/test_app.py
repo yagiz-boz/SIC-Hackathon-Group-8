@@ -1,11 +1,12 @@
 import json
 import sys
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from core import CATALOG, MODES, defaults, payload, validate, monthly_energy
+from core import CATALOG, MODES, defaults, payload, validate, monthly_energy, potential_saving
 from streamlit.testing.v1 import AppTest
 
 
@@ -45,6 +46,73 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(len(validate(h, [d])), 4)
         with self.assertRaises(ValueError):
             payload(h, [d], {})
+
+
+class SavingTests(unittest.TestCase):
+    def device(self, mode='Power and daily use', quantity=1, **values):
+        return dict(id='device-1', quantity=quantity, input_mode=mode,
+                    inputs={k: {'value': v, 'source': 'reference_estimate'} for k, v in values.items()})
+
+    def test_heater_and_immutability(self):
+        devices = [self.device(quantity=2, power_w=1500, hours_per_day=3)]
+        before = deepcopy(devices)
+        result = potential_saving(devices, 'device-1', 'hours_per_day', 2)
+        self.assertEqual(result['current_kwh'], 270)
+        self.assertEqual(result['scenario_kwh'], 180)
+        self.assertEqual(result['potential_saving_kwh'], 90)
+        self.assertEqual(devices, before)
+
+    def test_other_modes(self):
+        cases = [
+            ('Energy per cycle', dict(kwh_per_cycle=.7, cycles_per_week=7), 'cycles_per_week', 3.5, 10.5),
+            ('Energy per 100 cycles', dict(kwh_per_100_cycles=70, cycles_per_week=7), 'cycles_per_week', 3.5, 10.5),
+            ('Annual energy', dict(kwh_per_year=365), 'kwh_per_year', 182.5, 15),
+            ('Monthly energy', dict(kwh_per_month=40), 'kwh_per_month', 30, 10),
+            ('Battery and charging', dict(battery_wh=20, charges_per_day=1, charging_efficiency_pct=80), 'charging_efficiency_pct', 100, .15),
+        ]
+        for mode, values, field, proposed, expected in cases:
+            with self.subTest(mode=mode):
+                result = potential_saving([self.device(mode, **values)], 'device-1', field, proposed)
+                self.assertAlmostEqual(result['potential_saving_kwh'], expected)
+
+    def test_zero_increase_and_period(self):
+        ds = [self.device(power_w=1000, hours_per_day=3)]
+        self.assertEqual(potential_saving(ds, 'device-1', 'hours_per_day', 3)['potential_saving_kwh'], 0)
+        self.assertEqual(potential_saving(ds, 'device-1', 'hours_per_day', 4)['potential_saving_kwh'], -30)
+        self.assertEqual(potential_saving(ds, 'device-1', 'hours_per_day', 0, 31)['potential_saving_kwh'], 93)
+
+    def test_invalid_proposals(self):
+        ds = [self.device(power_w=1500, hours_per_day=3)]
+        before = deepcopy(ds)
+        for value in (-1, 25, float('nan'), float('inf'), True, '2', None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                potential_saving(ds, 'device-1', 'hours_per_day', value)
+        for field in ('quantity', 'cycles_per_week', 'id', None):
+            with self.assertRaises(ValueError):
+                potential_saving(ds, 'device-1', field, 1)
+        for days in (0, 32, True, 30.5):
+            with self.assertRaises(ValueError):
+                potential_saving(ds, 'device-1', 'hours_per_day', 2, days)
+        for device_id in ('missing', '', None):
+            with self.assertRaises(ValueError):
+                potential_saving(ds, device_id, 'hours_per_day', 2)
+        self.assertEqual(ds, before)
+
+    def test_invalid_baselines(self):
+        valid = self.device(power_w=1500, hours_per_day=3)
+        bads = [[], [valid, deepcopy(valid)], [dict(valid, quantity=True)],
+                [dict(valid, input_mode='unknown')], [dict(valid, inputs={})],
+                [self.device(power_w=-100, hours_per_day=3)],
+                [self.device('Battery and charging', battery_wh=15, charges_per_day=1, charging_efficiency_pct=0)]]
+        for ds in bads:
+            with self.subTest(devices=ds), self.assertRaises(ValueError):
+                potential_saving(ds, 'device-1', 'hours_per_day', 2)
+        phone = self.device('Battery and charging', battery_wh=15, charges_per_day=1, charging_efficiency_pct=85)
+        for efficiency in (0, 101):
+            with self.assertRaises(ValueError):
+                potential_saving([phone], 'device-1', 'charging_efficiency_pct', efficiency)
+        with self.assertRaises(ValueError):
+            potential_saving([self.device(quantity=1000, power_w=1e308, hours_per_day=24)], 'device-1', 'hours_per_day', 23)
 
 
 class InteractionTests(unittest.TestCase):

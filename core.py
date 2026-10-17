@@ -1,5 +1,6 @@
 """Validated appliance inputs and transparent monthly energy estimates."""
 import math
+from copy import deepcopy
 
 MODES = {
     'Power and daily use': [('power_w', 'Average operating power (W)', 100.0, None), ('hours_per_day', 'Usage per day (hours)', 3.0, 24.0)],
@@ -62,6 +63,71 @@ def monthly_energy(device, days=30):
     else:
         raise ValueError('Unknown energy input type.')
     return energy * device['quantity']
+
+def potential_saving(devices, device_id, field, proposed_value, days=30):
+    """Evaluate one independent scenario without modifying the inventory.
+
+    Returns monthly kWh for the selected device group (quantity included),
+    not the entire household. Savings are signed: negative means increased
+    consumption. Do not add overlapping scenarios for the same device.
+    Only numeric input fields in the device's current mode can be changed.
+    Raises ValueError for invalid requests, baselines or non-finite results.
+    """
+    if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 31:
+        raise ValueError('Month length must be between 1 and 31 days.')
+    if not isinstance(device_id, str) or not device_id.strip():
+        raise ValueError('Device ID must be a non-empty string.')
+    if not isinstance(devices, list) or any(not isinstance(d, dict) for d in devices):
+        raise ValueError('Devices must be a list of device objects.')
+    matches = [d for d in devices if d.get('id') == device_id]
+    if len(matches) != 1:
+        raise ValueError('Device ID must identify exactly one device.')
+    device = matches[0]
+    mode = device.get('input_mode')
+    if not isinstance(mode, str) or mode not in MODES:
+        raise ValueError('Unknown energy input type.')
+    specs = {key: maximum for key, _, _, maximum in MODES[mode]}
+    if not isinstance(field, str) or field not in specs:
+        raise ValueError('Field is not supported by this device energy input type.')
+    quantity = device.get('quantity')
+    if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity < 1:
+        raise ValueError('Device quantity must be a positive integer.')
+
+    def check_value(key, value):
+        try:
+            valid = (isinstance(value, (int, float)) and not isinstance(value, bool)
+                     and math.isfinite(value) and value >= 0
+                     and (specs[key] is None or value <= specs[key])
+                     and (key != 'charging_efficiency_pct' or value > 0))
+        except OverflowError:
+            valid = False
+        if not valid:
+            raise ValueError(f'Invalid value for {key}.')
+
+    inputs = device.get('inputs')
+    if not isinstance(inputs, dict):
+        raise ValueError('Device inputs must be an object.')
+    for key in specs:
+        entry = inputs.get(key)
+        if not isinstance(entry, dict) or 'value' not in entry:
+            raise ValueError(f'Missing device input: {key}.')
+        check_value(key, entry['value'])
+    check_value(field, proposed_value)
+    scenario = deepcopy(device)
+    scenario['inputs'][field]['value'] = proposed_value
+    try:
+        current = monthly_energy(device, days)
+        proposed = monthly_energy(scenario, days)
+        saving = current - proposed
+        if not all(math.isfinite(v) for v in (current, proposed, saving)):
+            raise ValueError('Scenario consumption must be finite.')
+    except OverflowError as exc:
+        raise ValueError('Scenario consumption is too large.') from exc
+    return {'device_id': device_id, 'field': field,
+            'current_value': inputs[field]['value'], 'proposed_value': proposed_value,
+            'month_days': days, 'current_kwh': current, 'scenario_kwh': proposed,
+            'potential_saving_kwh': saving}
+
 
 def defaults(kind, mode):
     values = {key: value for key, _, value, _ in MODES[mode]}
