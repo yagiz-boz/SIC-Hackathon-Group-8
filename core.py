@@ -183,4 +183,4 @@ def payload(household, devices, assumptions):
             'notes': ['All appliance inputs are per unit; quantity applies to identical devices.',
                       'Reference defaults are illustrative editable assumptions, not certified measurements.',
                       'Estimated consumption based on your inputs and reference assumptions. Actual consumption may vary.',
-                      'No automatic dwelling multiplier or Gemini integration. Annual energy is prorated using 365 days; weekly cycles use days/7; monthly input covers the selected period.']}
+                      'No automatic dwelling multiplier. Gemini never supplies calculated kWh values. Annual energy is prorated using 365 days; weekly cycles use days/7; monthly input covers the selected period.']}
